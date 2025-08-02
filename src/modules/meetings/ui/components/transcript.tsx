@@ -40,7 +40,7 @@ export const Transcript = ({meetingId}:Props) => {
                                 <div className="flex gap-x-2 items-center">
                                     <Avatar className="size-6">
                                         <AvatarImage
-                                            src={item.user.image ?? generateAvatarUri({seed:item.user.name , variant:"initials"})}
+                                            src={String(item.user.image ?? generateAvatarUri({seed:item.user.name , variant:"initials"}))}
                                             alt="User Avatar"
                                         />
                                     </Avatar>
