@@ -42,13 +42,13 @@ export const UpgradeView = () => {
                         const isCurrentProduct = currentSubscription?.id === product.id;
                         const isPremium = !!currentSubscription;
                         let buttonText = "Upgrade";
-                        let onClick = () => authClient.checkout({products:[product.id]})
+                        let onClick = () => (authClient as any).checkout({products:[product.id]})
                         if(isCurrentProduct){
                             buttonText = "Manage";
-                            onClick = () => authClient.customer.portal();
+                            onClick = () => (authClient as any).customer.portal();
                         } else if (isPremium){
                             buttonText = "Change Plan";
-                            onClick = () => authClient.customer.portal();
+                            onClick = () => (authClient as any).customer.portal();
                         }
                         return (
                             <PricingCard

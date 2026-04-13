@@ -17,7 +17,7 @@ export const auth = betterAuth({
         }),
         portal(),
       ]
-    })
+    }) as any
   ],
   socialProviders: {
         google: { 
