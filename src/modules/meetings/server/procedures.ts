@@ -14,11 +14,14 @@ import { streamChat } from "@/lib/stream-chat";
 
 export const meetingsRouter = createTRPCRouter({
     generateChatToken:protectedProcedure.mutation(async({ctx}) => {
-        const token = streamChat.createToken(ctx.auth.user.id)
-        await streamChat.upsertUser({
-            id:ctx.auth.user.id,
-            role:"admin",
-        })
+        // Expiring (1h) token; the chat client calls this provider again to refresh it.
+        const token = streamChat.generateUserToken({user_id:ctx.auth.user.id})
+        await streamChat.upsertUsers([
+            {
+                id:ctx.auth.user.id,
+                role:"admin",
+            }
+        ])
         return token;
     }),
     getTranscript:protectedProcedure

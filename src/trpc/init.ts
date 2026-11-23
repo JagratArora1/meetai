@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth';
 import { initTRPC, TRPCError } from '@trpc/server';
 import { headers } from 'next/headers';
 import { polarClient } from '@/lib/polar';
+import { getStateExternalCustomers } from '@polar-sh/sdk/2026-10/services/customers';
 import { cache } from 'react';
 import { db } from '@/db';
 import { meetings, agents } from '@/db/schema';
@@ -39,9 +40,7 @@ export const protectedProcedure = baseProcedure.use(async ({ctx,next}) => {
 
 export const premiumProcedure = (entity:"meetings" | "agents") => 
   protectedProcedure.use(async({ctx,next}) => {
-    const customer = await polarClient.customers.getStateExternal({
-      externalId:ctx.auth.user.id
-    })
+    const customer = await getStateExternalCustomers(polarClient)(ctx.auth.user.id)
     const [userMeetings] = await db
         .select({
             count:count(meetings.id)
@@ -55,7 +54,7 @@ export const premiumProcedure = (entity:"meetings" | "agents") =>
         .from(agents)
         .where(eq(agents.userId,ctx.auth.user.id))
     
-        const isPremium = customer.activeSubscriptions.length > 0;
+        const isPremium = customer.active_subscriptions.length > 0;
         const isFreeAgentLimitReached = userAgents.count >= MAX_FREE_AGENTS;
         const isFreeMeetingLimitReached = userMeetings.count >= MAX_FREE_MEETINGS;
         const shouldThrowMeetingError =

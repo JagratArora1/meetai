@@ -4,11 +4,14 @@ import { inngest } from "@/inngest/client";
 import { StreamTranscriptItem } from "@/modules/meetings/types";
 import { eq, inArray } from "drizzle-orm";
 import JSONL from "jsonl-parse-stringify";
-import { createAgent, openai, TextMessage} from "@inngest/agent-kit"
+import OpenAI from "openai";
 
-const summarizer = createAgent({
-  name:"summarizer",
-  system:`
+const openaiClient = new OpenAI({apiKey:process.env.OPENAI_API_KEY});
+
+// Same model and system prompt the @inngest/agent-kit summarizer used (agent-kit predates
+// Inngest v4); the call now runs inside step.run so its result is memoized by Inngest.
+const SUMMARIZER_MODEL = "gpt-4o";
+const SUMMARIZER_SYSTEM_PROMPT = `
   You are an expert summarizer. You write readable, concise, simple content. You are given a transcript of a meeting and you need to summarize it.
 
 Use the following markdown structure for every output:
@@ -28,13 +31,10 @@ Example:
 #### Next Section
 - Feature X automatically does Y
 - Mention of integration with Z
-  `.trim(),
-  model:openai({model:"gpt-4o",apiKey:process.env.OPENAI_API_KEY}),
-})
+  `.trim();
 
 export const meetingsProcessing = inngest.createFunction(
-  {id:"meetings/processing"},
-  {event:"meetings/processing"},
+  {id:"meetings/processing",triggers:{event:"meetings/processing"}},
   async ({event,step}) => {
     const response = await step.run("fetch-transcript",async () => {
       return fetch(event.data.transcriptUrl).then((res) => res.text());
@@ -85,16 +85,25 @@ export const meetingsProcessing = inngest.createFunction(
         }
       })
     })
-    const {output} = await summarizer.run(
-      "Summarize the following transcript:" +
-        JSON.stringify(transcriptWithSpeakers)
-    )
+    const summary = await step.run("summarize", async () => {
+      const completion = await openaiClient.chat.completions.create({
+        model:SUMMARIZER_MODEL,
+        messages:[
+          {role:"system",content:SUMMARIZER_SYSTEM_PROMPT},
+          {
+            role:"user",
+            content:"Summarize the following transcript:" + JSON.stringify(transcriptWithSpeakers),
+          },
+        ],
+      })
+      return completion.choices[0]?.message.content ?? "";
+    })
 
     await step.run("save-summary", async () => {
       await db
         .update(meetings)
         .set({
-          summary:(output[0] as TextMessage).content as string,
+          summary,
           status:"completed"
         })
         .where(eq(meetings.id,event.data.meetingId))

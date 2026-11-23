@@ -213,9 +213,11 @@ export async function POST(req:NextRequest){
                     Be concise, helpful, and focus on providing accurate information from the meeting and the ongoing conversation.
                     `;
                 
-                const channel = streamChat.channel("messaging",channelId)
-                await channel.watch();
-                const previousMessages = channel.state.messages
+                // Last 5 messages of the channel (oldest first), as the old watch()+slice(-5) gave.
+                const {messages:recentMessages} = await streamChat.chat
+                    .channel("messaging",channelId)
+                    .getOrCreate({messages:{limit:5}})
+                const previousMessages = recentMessages
                     .slice(-5)
                     .filter((msg) => msg.text && msg.text.trim() !== "")
                     .map<ChatCompletionMessageParam>((message) => ({
@@ -241,17 +243,20 @@ export async function POST(req:NextRequest){
                 seed:existingAgent.name,
                 variant:"botttsNeutral"
             })
-            streamChat.upsertUser({
-                id:existingAgent.id,
-                name:existingAgent.name,
-                image:avatarUrl,
-            })
-            channel.sendMessage({
-                text:GPTResponseText,
-                user:{
+            // Awaited so the reply is posted before the serverless function returns.
+            await streamChat.upsertUsers([
+                {
                     id:existingAgent.id,
                     name:existingAgent.name,
                     image:avatarUrl,
+                }
+            ])
+            await streamChat.chat.sendMessage({
+                type:"messaging",
+                id:channelId,
+                message:{
+                    text:GPTResponseText,
+                    user_id:existingAgent.id,
                 }
             })
 

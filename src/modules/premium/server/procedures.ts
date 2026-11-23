@@ -1,3 +1,5 @@
+import { getStateExternalCustomers } from "@polar-sh/sdk/2026-10/services/customers";
+import { getProducts, listProducts } from "@polar-sh/sdk/2026-10/services/products";
 import { polarClient } from "@/lib/polar";
 import { createTRPCRouter,protectedProcedure } from "@/trpc/init";
 import { db } from "@/db";
@@ -6,29 +8,23 @@ import { count,eq } from "drizzle-orm";
 
 export const premiumRouter = createTRPCRouter({
     getCurrentSubscription:protectedProcedure.query(async({ctx}) => {
-        const customer = await polarClient.customers.getStateExternal({
-            externalId:ctx.auth.user.id
-        })
-        const subscription = customer.activeSubscriptions[0];
+        const customer = await getStateExternalCustomers(polarClient)(ctx.auth.user.id)
+        const subscription = customer.active_subscriptions[0];
         if(!subscription) return null;
-        const product = await polarClient.products.get({
-            id:subscription.productId,
-        })
+        const product = await getProducts(polarClient)(subscription.product_id)
         return product;
     }),
     getProducts:protectedProcedure.query(async() => {
-        const products = await polarClient.products.list({
-            isArchived:false,
-            isRecurring:true,
+        const products = await listProducts(polarClient)({
+            is_archived:false,
+            is_recurring:true,
             sorting:["price_amount"]
         })
-        return products.result.items;
+        return products.items;
     }),
     getFreeUsage:protectedProcedure.query(async({ctx})=> {
-        const customer = await polarClient.customers.getStateExternal({
-            externalId:ctx.auth.user.id
-        })
-        const subscription = customer.activeSubscriptions[0];
+        const customer = await getStateExternalCustomers(polarClient)(ctx.auth.user.id)
+        const subscription = customer.active_subscriptions[0];
         if(subscription) return null;
         const [userMeetings] = await db
             .select({

@@ -62,16 +62,16 @@ export const UpgradeView = () => {
                                 }
                                 title={product.name}
                                 price={
-                                    product.prices[0].amountType === "fixed"
-                                        ? product.prices[0].priceAmount / 100
+                                    product.prices[0].amount_type === "fixed"
+                                        ? product.prices[0].price_amount / 100
                                         : 0
                                 }
                                 description={product.description}
                                 priceSuffix={`/${
                                     // The billing interval lives on the product; only legacy prices still carry it.
-                                    product.recurringInterval ??
-                                    ("recurringInterval" in product.prices[0]
-                                        ? product.prices[0].recurringInterval
+                                    product.recurring_interval ??
+                                    ("recurring_interval" in product.prices[0]
+                                        ? product.prices[0].recurring_interval
                                         : "")
                                 }`}
                                 features={product.benefits.map(
