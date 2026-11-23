@@ -1,6 +1,6 @@
 import { and,eq,not } from "drizzle-orm";
 import { NextRequest,NextResponse } from "next/server";
-import { CallSessionParticipantLeftEvent,CallSessionStartedEvent,CallEndedEvent,CallTranscriptionReadyEvent,CallRecordingReadyEvent,MessageNewEvent } from "@stream-io/node-sdk";
+import { CallSessionParticipantLeftEvent,CallSessionStartedEvent,CallEndedEvent,CallTranscriptionReadyEvent,CallRecordingReadyEvent,MessageNewEvent,InvalidWebhookError,InvalidWebhookErrorMessages,verifyAndParseWebhook } from "@stream-io/node-sdk";
 import { db } from "@/db";
 import { agents,meetings } from "@/db/schema";
 import { streamVideo } from "@/lib/stream-video";
@@ -12,10 +12,6 @@ import { streamChat } from "@/lib/stream-chat";
 
 const openaiClient = new OpenAI({apiKey:process.env.OPENAI_API_KEY!});
 
-function verifySignatureWithSDK(body:string,signature:string):boolean{
-    return streamVideo.verifyWebhook(body,signature);
-}
-
 export async function POST(req:NextRequest){
     const signature=req.headers.get("x-signature");
     const apiKey=req.headers.get("x-api-key");
@@ -25,19 +21,27 @@ export async function POST(req:NextRequest){
             {status:400}
         )
     }
-    const body = await req.text();
-    if(!verifySignatureWithSDK(body,signature)){
-        return NextResponse.json(
-            {error:"Invalid Signature"},
-            {status:401}
-        )
-    }
+    // Stream can deliver webhook bodies gzip-compressed, and signs the uncompressed JSON.
+    // Read the raw bytes (req.text() would mangle gzip data) and let the SDK gunzip,
+    // verify the HMAC and parse.
+    const rawBody = Buffer.from(await req.arrayBuffer());
     let payload:unknown;
     try{
-        payload=JSON.parse(body) as Record<string,unknown>;
-    } catch {
+        payload = verifyAndParseWebhook(rawBody,signature,process.env.STREAM_VIDEO_SECRET_KEY!);
+    } catch (error) {
+        if(error instanceof InvalidWebhookError && error.message === InvalidWebhookErrorMessages.signatureMismatch){
+            console.warn("Stream webhook rejected: signature mismatch",{
+                contentEncoding:req.headers.get("content-encoding"),
+                bytes:rawBody.length,
+                gzipMagic:rawBody[0] === 0x1f && rawBody[1] === 0x8b,
+            });
+            return NextResponse.json(
+                {error:"Invalid Signature"},
+                {status:401}
+            )
+        }
         return NextResponse.json(
-            {error:"Invalid JSON"},
+            {error:"Invalid payload"},
             {status:400}
         )
     }
