@@ -46,6 +46,7 @@ export const SignInView = () => {
                     router.push("/");
                 },
                 onError: ({error}) => {
+                    setPending(false);
                     setError(error.message);
                 }
             }
@@ -64,6 +65,7 @@ export const SignInView = () => {
                         setPending(false);
                     },
                     onError: ({error}) => {
+                        setPending(false);
                         setError(error.message);
                     }
                 }

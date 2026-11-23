@@ -42,13 +42,13 @@ export const UpgradeView = () => {
                         const isCurrentProduct = currentSubscription?.id === product.id;
                         const isPremium = !!currentSubscription;
                         let buttonText = "Upgrade";
-                        let onClick = () => (authClient as any).checkout({products:[product.id]})
+                        let onClick = () => authClient.checkout({products:[product.id]})
                         if(isCurrentProduct){
                             buttonText = "Manage";
-                            onClick = () => (authClient as any).customer.portal();
+                            onClick = () => authClient.customer.portal();
                         } else if (isPremium){
                             buttonText = "Change Plan";
-                            onClick = () => (authClient as any).customer.portal();
+                            onClick = () => authClient.customer.portal();
                         }
                         return (
                             <PricingCard
@@ -67,7 +67,13 @@ export const UpgradeView = () => {
                                         : 0
                                 }
                                 description={product.description}
-                                priceSuffix={`/${product.prices[0].recurringInterval}`}
+                                priceSuffix={`/${
+                                    // The billing interval lives on the product; only legacy prices still carry it.
+                                    product.recurringInterval ??
+                                    ("recurringInterval" in product.prices[0]
+                                        ? product.prices[0].recurringInterval
+                                        : "")
+                                }`}
                                 features={product.benefits.map(
                                     (benefit) => benefit.description
                                 )}

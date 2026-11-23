@@ -1,6 +1,7 @@
 "use client"
 import { format } from "date-fns"
 import { ColumnDef } from "@tanstack/react-table"
+import type { DataTableFeatures } from "@/components/data-table"
 import { MeetingGetMany } from "../../types"
 import { GeneratedAvatar } from "@/components/generated-avatar"
 import { CircleCheckIcon,CircleXIcon,LoaderIcon,CornerDownRightIcon, ClockArrowUpIcon, ClockFadingIcon } from "lucide-react"
@@ -24,7 +25,7 @@ const statusColorMap = {
     cancelled:"bg-rose-500/20 text-rose-800 border-rose-800/5",
 }
 
-export const columns: ColumnDef<MeetingGetMany[number]>[] = [
+export const columns: ColumnDef<DataTableFeatures, MeetingGetMany[number]>[] = [
   {
     accessorKey: "name",
     header: "Meeting Name",

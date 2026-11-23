@@ -2,9 +2,10 @@
 
 import {
   ColumnDef,
+  RowData,
   flexRender,
-  getCoreRowModel,
-  useReactTable,
+  tableFeatures,
+  useTable,
 } from "@tanstack/react-table";
 
 import {
@@ -14,21 +15,25 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface DataTableProps<TData, TValue> {
-  columns: ColumnDef<TData, TValue>[];
+// TanStack Table v9: the core row model is built in; these tables need no extra features.
+export const dataTableFeatures = tableFeatures({});
+export type DataTableFeatures = typeof dataTableFeatures;
+
+interface DataTableProps<TData extends RowData> {
+  columns: ColumnDef<DataTableFeatures, TData>[];
   data: TData[];
   onRowClick?:(row:TData) => void;
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends RowData>({
   columns,
   data,
   onRowClick,
-}: DataTableProps<TData, TValue>) {
-  const table = useReactTable({
+}: DataTableProps<TData>) {
+  const table = useTable({
+    features: dataTableFeatures,
     data,
     columns,
-    getCoreRowModel: getCoreRowModel(),
   });
 
     return (
@@ -40,10 +45,9 @@ export function DataTable<TData, TValue>({
                 <TableRow
                 onClick={() => onRowClick?.(row.original)}
                 key={row.id}
-                data-state={row.getIsSelected() && "selected"}
                     className="cursor-pointer"
                 >
-                    {row.getVisibleCells().map((cell) => (
+                    {row.getAllCells().map((cell) => (
                     <TableCell key={cell.id} className="text-sm p-4">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>

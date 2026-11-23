@@ -71,9 +71,9 @@ export const meetingsRouter = createTRPCRouter({
                 .then((agents) => 
                     agents.map((agent) => ({
                         ...agent,
-                        image:
-                            user.image ??
-                            generateAvatarUri({seed:agent.name , variant:"botttsNeutral"})
+                        // Agents have no image column; `user.image` here was the Drizzle column
+                        // object, which made the response fail to serialize.
+                        image:generateAvatarUri({seed:agent.name , variant:"botttsNeutral"})
                     })))
             
             const speakers = [...userSpeakers,...agentSpeakers]
@@ -119,7 +119,7 @@ export const meetingsRouter = createTRPCRouter({
         const token = streamVideo.generateUserToken({
             user_id:ctx.auth.user.id,
             exp:expirationTime,
-            validity_in_seconds:issuedAt,
+            iat:issuedAt,
         });
         return token;
     }),
