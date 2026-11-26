@@ -196,7 +196,10 @@ export async function POST(req:NextRequest){
                     {status:404}
                 )
             }
-            if(userId!==existingAgent.id){
+            // Answer only the meeting's owner. This also skips the agent's own replies, and keeps
+            // anyone else who can post in the channel from reading the summary or the agent's
+            // instructions through the bot, or running up OpenAI usage.
+            if(userId===existingMeeting.userId){
                 const instructions = `
                     You are an AI assistant helping the user revisit a recently completed meeting.
                     Below is a summary of the meeting, generated from the transcript:
