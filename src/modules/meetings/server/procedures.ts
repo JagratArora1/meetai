@@ -149,6 +149,23 @@ export const meetingsRouter = createTRPCRouter({
     update:protectedProcedure
             .input(meetingsUpdateSchema)
             .mutation(async({ctx,input}) => {
+                // The agent joins the call with its instructions, so it must be one of the
+                // caller's own agents, not any agent whose id they send.
+                const [ownAgent] = await db
+                    .select({id:agents.id})
+                    .from(agents)
+                    .where(
+                        and(
+                            eq(agents.id,input.agentId),
+                            eq(agents.userId,ctx.auth.user.id),
+                        ),
+                    );
+                if(!ownAgent){
+                    throw new TRPCError({
+                        code:"NOT_FOUND",
+                        message:"Agent not found",
+                    });
+                }
                 const [updatedMeeting] = await db 
                     .update(meetings)
                     .set(input)
@@ -168,6 +185,24 @@ export const meetingsRouter = createTRPCRouter({
                 return updatedMeeting;
             }),
     create:premiumProcedure("meetings").input(meetingsInsertSchema).mutation(async({input,ctx}) => {
+            // Check the agent belongs to the caller before creating the meeting and its call.
+            const [existingAgent] = await db
+                .select()
+                .from(agents)
+                .where(
+                    and(
+                        eq(agents.id,input.agentId),
+                        eq(agents.userId,ctx.auth.user.id),
+                    ),
+                );
+
+            if(!existingAgent){
+                throw new TRPCError({
+                    code:"NOT_FOUND",
+                    message:"Agent not found",
+                })
+            }
+
             const [createdMeeting] = await db
             .insert(meetings)
             .values({
@@ -196,17 +231,6 @@ export const meetingsRouter = createTRPCRouter({
                     },
                 },
             });
-            const [existingAgent] = await db
-                .select()
-                .from(agents)
-                .where(eq(agents.id,createdMeeting.agentId));
-
-            if(!existingAgent){
-                throw new TRPCError({
-                    code:"NOT_FOUND",
-                    message:"Agent not found",
-                })
-            }
 
             await streamVideo.upsertUsers([
                 {
