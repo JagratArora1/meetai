@@ -9,8 +9,15 @@ import OpenAI from "openai"
 import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { generateAvatarUri } from "@/lib/avatar";
 import { streamChat } from "@/lib/stream-chat";
+import { gunzipSync } from "node:zlib";
 
 const openaiClient = new OpenAI({apiKey:process.env.OPENAI_API_KEY!});
+
+// Stream events are a few kilobytes. 5 MB is about what an uncompressed request can carry on
+// Vercel (4.5 MB), so the cap only stops bodies that inflate far beyond any real event.
+const MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
+
+const isGzip = (bytes:Buffer) => bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
 
 export async function POST(req:NextRequest){
     const signature=req.headers.get("x-signature");
@@ -22,18 +29,38 @@ export async function POST(req:NextRequest){
         )
     }
     // Stream can deliver webhook bodies gzip-compressed, and signs the uncompressed JSON.
-    // Read the raw bytes (req.text() would mangle gzip data) and let the SDK gunzip,
-    // verify the HMAC and parse.
+    // Read the raw bytes (req.text() would mangle gzip data), gunzip them here with a size
+    // cap, then let the SDK verify the HMAC and parse. The SDK's own gunzip has no limit and
+    // runs before the signature check, so a small unsigned gzip body could inflate to
+    // gigabytes in memory.
     const rawBody = Buffer.from(await req.arrayBuffer());
+    let body = rawBody;
+    if(isGzip(rawBody)){
+        try{
+            body = gunzipSync(rawBody,{maxOutputLength:MAX_WEBHOOK_BODY_BYTES});
+        } catch {
+            return NextResponse.json(
+                {error:"Invalid payload"},
+                {status:400}
+            )
+        }
+        // Stream compresses once; a second gzip layer would reach the SDK's unbounded gunzip.
+        if(isGzip(body)){
+            return NextResponse.json(
+                {error:"Invalid payload"},
+                {status:400}
+            )
+        }
+    }
     let payload:unknown;
     try{
-        payload = verifyAndParseWebhook(rawBody,signature,process.env.STREAM_VIDEO_SECRET_KEY!);
+        payload = verifyAndParseWebhook(body,signature,process.env.STREAM_VIDEO_SECRET_KEY!);
     } catch (error) {
         if(error instanceof InvalidWebhookError && error.message === InvalidWebhookErrorMessages.signatureMismatch){
             console.warn("Stream webhook rejected: signature mismatch",{
                 contentEncoding:req.headers.get("content-encoding"),
                 bytes:rawBody.length,
-                gzipMagic:rawBody[0] === 0x1f && rawBody[1] === 0x8b,
+                gzipMagic:isGzip(rawBody),
             });
             return NextResponse.json(
                 {error:"Invalid Signature"},
