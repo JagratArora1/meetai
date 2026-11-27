@@ -1,6 +1,7 @@
 import { and,eq,not } from "drizzle-orm";
-import { NextRequest,NextResponse } from "next/server";
-import { CallSessionParticipantLeftEvent,CallSessionStartedEvent,CallEndedEvent,CallTranscriptionReadyEvent,CallRecordingReadyEvent,MessageNewEvent,InvalidWebhookError,InvalidWebhookErrorMessages,verifyAndParseWebhook } from "@stream-io/node-sdk";
+import { NextRequest,NextResponse,after } from "next/server";
+import { CallSessionParticipantLeftEvent,CallSessionStartedEvent,CallEndedEvent,CallTranscriptionReadyEvent,CallRecordingReadyEvent,MessageNewEvent,InvalidWebhookError,InvalidWebhookErrorMessages,verifyAndParseWebhook,type StreamCall } from "@stream-io/node-sdk";
+import type { RealtimeClient,RealtimeEventEnvelope } from "@stream-io/openai-realtime-api";
 import { db } from "@/db";
 import { agents,meetings } from "@/db/schema";
 import { streamVideo } from "@/lib/stream-video";
@@ -93,15 +94,33 @@ export async function POST(req:NextRequest){
                 )
             }
             const call = streamVideo.video.call("default",meetingId);
-            const realTimeClient = await streamVideo.video.connectOpenAi({
-                call,
-                openAiApiKey:process.env.OPENAI_API_KEY!,
-                agentUserId:existingAgent.id,
-                model:"gpt-realtime",
-            })
+            let realTimeClient:RealtimeClient;
+            try{
+                realTimeClient = await streamVideo.video.connectOpenAi({
+                    call,
+                    openAiApiKey:process.env.OPENAI_API_KEY!,
+                    agentUserId:existingAgent.id,
+                    model:"gpt-realtime",
+                })
+            } catch (error) {
+                console.error("Could not connect the AI agent to the call",{meetingId,error:describeError(error)});
+                return NextResponse.json(
+                    {error:"Could not connect the agent"},
+                    {status:500}
+                )
+            }
+            // This function holds the agent's realtime WebSocket (Stream's edge bridges the audio).
+            // Vercel can suspend the function once the response is sent, which leaves the agent
+            // silent, so keep the function running until the agent's session ends.
+            const agentSession = keepAgentConnected(realTimeClient,call,meetingId);
+            // The SDK's default session sends turn_detection: null, which turns OpenAI's turn
+            // detection off, so the model never answers on its own. Turn it on, as Stream's AI
+            // voice assistant tutorial does.
             realTimeClient.updateSession({
                 instructions:existingAgent.instructions,
+                turn_detection:{type:"semantic_vad"},
             })
+            after(agentSession);
         } else if(eventType === "call.session_participant_left"){
             const event = payload as CallSessionParticipantLeftEvent;
             const meetingId = event.call_cid.split(":")[1];
@@ -270,4 +289,73 @@ export async function POST(req:NextRequest){
             }
         }
     return NextResponse.json({status:"ok"})
+}
+
+// The agent's session runs after the response, within this route's time limit. Vercel Hobby with
+// Fluid compute allows at most 300 s, so on Vercel the agent stays for about 5 minutes.
+export const maxDuration = 300;
+
+// End the agent's session a little before maxDuration so it leaves cleanly instead of being cut
+// off; the work before the response (database, connecting the agent) takes a few seconds.
+const AGENT_SESSION_LIMIT_MS = 280_000;
+const CALL_STATE_POLL_MS = 15_000;
+
+// Log only an error's name and message; SDK errors can carry request details.
+function describeError(error:unknown){
+    return error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+}
+
+// Settles when the agent's realtime socket closes, the call ends or the time limit is reached,
+// and disconnects the agent if it is still connected. The counts in the final log show whether
+// OpenAI acknowledged the session updates and produced responses.
+function keepAgentConnected(realTimeClient:RealtimeClient,call:StreamCall,meetingId:string){
+    const startedAt = Date.now();
+    let sessionUpdates = 0;
+    let responses = 0;
+    let finished = false;
+    return new Promise<void>((resolve) => {
+        const finish = (reason:string) => {
+            if(finished){
+                return;
+            }
+            finished = true;
+            clearTimeout(limit);
+            clearInterval(poll);
+            if(realTimeClient.isConnected()){
+                realTimeClient.disconnect();
+            }
+            console.log("AI agent session ended",{
+                meetingId,
+                reason,
+                seconds:Math.round((Date.now()-startedAt)/1000),
+                sessionUpdates,
+                responses,
+            });
+            resolve();
+        };
+        realTimeClient.on("realtime.event",(envelope)=>{
+            const {source,event} = envelope as RealtimeEventEnvelope;
+            if(source==="server" && event.type==="session.updated"){
+                sessionUpdates++;
+            } else if(source==="server" && event.type==="response.done"){
+                responses++;
+            }
+        });
+        realTimeClient.on("close",()=>finish("realtime socket closed"));
+        const limit = setTimeout(()=>finish("time limit"),AGENT_SESSION_LIMIT_MS);
+        const poll = setInterval(()=>{
+            call.get()
+                .then(({call:state})=>{
+                    if(state.ended_at || state.session?.ended_at){
+                        finish("call ended");
+                    }
+                })
+                .catch((error:unknown)=>{
+                    console.warn("Could not read the call state",{meetingId,error:describeError(error)});
+                });
+        },CALL_STATE_POLL_MS);
+        if(!realTimeClient.isConnected()){
+            finish("realtime socket closed");
+        }
+    });
 }
