@@ -25,6 +25,9 @@ export const CallConnect = ({
     const {mutateAsync:generateToken} = useMutation(
         trpc.meetings.generateToken.mutationOptions()
     )
+    const {mutate:endCall} = useMutation(
+        trpc.meetings.endCall.mutationOptions()
+    )
     const [client,setClient] = useState<StreamVideoClient>();
     useEffect(()=>{
         const _client = new StreamVideoClient({
@@ -52,13 +55,20 @@ export const CallConnect = ({
         setCall(_call);
 
         return () => {
-            if(_call.state.callingState !== CallingState.LEFT){
+            const callingState = _call.state.callingState;
+            if(callingState !== CallingState.LEFT){
                 _call.leave();
-                _call.endCall();
+                // Leaving the page from inside the call ends it on the server, like the leave
+                // button. Leaving from the lobby (never joined) doesn't: joining a call that has
+                // ended needs Stream's join-ended-call permission, which the owner's "user" and
+                // "host" roles may not have, so the meeting could no longer be started.
+                if(callingState !== CallingState.IDLE && callingState !== CallingState.UNKNOWN){
+                    endCall({id:meetingId});
+                }
                 setCall(undefined);
             }
         }
-    },[client,meetingId])
+    },[client,meetingId,endCall])
 
     if(!client || !call){
         return(

@@ -12,6 +12,17 @@ import { generateAvatarUri } from "@/lib/avatar";
 import JSONL from "jsonl-parse-stringify";
 import { streamChat } from "@/lib/stream-chat";
 
+// Signed-in users get Stream's plain "user" role on both Stream Video and Stream Chat. The
+// "admin" role they used to get is app-wide: with it, any user's token could read every chat
+// channel and act as an admin on every call. A user reaches their own meeting through
+// membership instead: create() makes them a member of the meeting's call and chat channel.
+const streamUser = (user:{id:string; name:string; image?:string | null}) => ({
+    id:user.id,
+    name:user.name,
+    role:"user",
+    image:user.image ?? generateAvatarUri({seed:user.name,variant:"initials"}),
+});
+
 export const meetingsRouter = createTRPCRouter({
     generateChatToken:protectedProcedure.mutation(async({ctx}) => {
         // Expiring (1h) token; the chat client calls this provider again to refresh it.
@@ -19,7 +30,7 @@ export const meetingsRouter = createTRPCRouter({
         await streamChat.upsertUsers([
             {
                 id:ctx.auth.user.id,
-                role:"admin",
+                role:"user",
             }
         ])
         return token;
@@ -107,16 +118,7 @@ export const meetingsRouter = createTRPCRouter({
             return transcriptWithSpeakers;
         }),
     generateToken:protectedProcedure.mutation(async ({ctx}) => {
-        await streamVideo.upsertUsers([
-            {
-                id:ctx.auth.user.id,
-                name:ctx.auth.user.name,
-                role:"admin",
-                image:
-                    ctx.auth.user.image ?? 
-                    generateAvatarUri({seed:ctx.auth.user.name,variant:"initials"}),
-            }
-        ])
+        await streamVideo.upsertUsers([streamUser(ctx.auth.user)])
         const expirationTime = Math.floor(Date.now()/1000) + 3600;
         const issuedAt = Math.floor(Date.now()/1000) -60;
         const token = streamVideo.generateUserToken({
@@ -126,6 +128,29 @@ export const meetingsRouter = createTRPCRouter({
         });
         return token;
     }),
+    endCall:protectedProcedure
+        .input(z.object({id:z.string()}))
+        .mutation(async ({ctx,input}) => {
+            // Ending a call needs Stream's end-call permission, which the plain "user" role may
+            // not have. End it here instead, with the server key, and only for the meeting's owner.
+            const [existingMeeting] = await db
+                .select({id:meetings.id})
+                .from(meetings)
+                .where(
+                    and(
+                        eq(meetings.id,input.id),
+                        eq(meetings.userId,ctx.auth.user.id),
+                    ),
+                );
+            if(!existingMeeting){
+                throw new TRPCError({
+                    code:"NOT_FOUND",
+                    message:"Meeting not found",
+                });
+            }
+            await streamVideo.video.call("default",existingMeeting.id).end();
+            return {id:existingMeeting.id};
+        }),
     remove:protectedProcedure
             .input(z.object({id:z.string()}))
             .mutation(async({ctx,input}) => {
@@ -210,10 +235,16 @@ export const meetingsRouter = createTRPCRouter({
                 userId: ctx.auth.user.id,
             })
             .returning();
+            // Call members must already exist in Stream, and the owner may not have joined a
+            // call yet, so upsert them first.
+            await streamVideo.upsertUsers([streamUser(ctx.auth.user)]);
             const call = streamVideo.video.call("default",createdMeeting.id);
             await call.create({
                 data:{
                     created_by_id:ctx.auth.user.id,
+                    // The owner is the call's host. A member's role applies to this call only,
+                    // unlike the user's app-wide Stream role.
+                    members:[{user_id:ctx.auth.user.id,role:"host"}],
                     custom:{
                         meetingId:createdMeeting.id,
                         meetingName:createdMeeting.name,
@@ -243,6 +274,26 @@ export const meetingsRouter = createTRPCRouter({
                     })
                 }
             ])
+
+            // The post-meeting chat channel, with the owner as its creator and only member, so
+            // nobody else can create messaging:<meetingId> first and lock the owner out. The
+            // agent needs no membership: its replies are sent with the server key. Best effort:
+            // if this fails, the chat UI still creates the channel, with the owner as its
+            // member, the first time the owner opens it.
+            try{
+                await streamChat.upsertUsers([streamUser(ctx.auth.user)]);
+                await streamChat.chat.channel("messaging",createdMeeting.id).getOrCreate({
+                    data:{
+                        created_by_id:ctx.auth.user.id,
+                        members:[{user_id:ctx.auth.user.id}],
+                    },
+                });
+            } catch (error) {
+                console.warn("Could not create the meeting's chat channel",{
+                    meetingId:createdMeeting.id,
+                    error:error instanceof Error ? error.message : "unknown error",
+                });
+            }
             return createdMeeting;
         }),
     getOne: protectedProcedure.input(z.object({id:z.string()})).query(async ({ input,ctx }) => {
