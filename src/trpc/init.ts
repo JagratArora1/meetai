@@ -11,8 +11,9 @@ import { MAX_FREE_AGENTS, MAX_FREE_MEETINGS } from '@/modules/premium/constants'
 export const createTRPCContext = cache(async () => {
   /**
    * @see: https://trpc.io/docs/server/context
+   * The session is added by protectedProcedure, which reads it from the request headers.
    */
-  return { userId: 'user_123' };
+  return {};
 });
 // Avoid exporting the entire t-object
 // since it's not very descriptive.
