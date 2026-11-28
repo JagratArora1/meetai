@@ -11,6 +11,7 @@ import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { generateAvatarUri } from "@/lib/avatar";
 import { streamChat } from "@/lib/stream-chat";
 import { gunzipSync } from "node:zlib";
+import { timingSafeEqual } from "node:crypto";
 
 const openaiClient = new OpenAI({apiKey:process.env.OPENAI_API_KEY!});
 
@@ -20,6 +21,28 @@ const MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
 
 const isGzip = (bytes:Buffer) => bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
 
+// Stream sends the app's API key in X-Api-Key. Video and chat events come from the same Stream
+// app (both are verified with the video secret below), so either configured key is accepted;
+// normally they are the same value. timingSafeEqual compares in constant time.
+const isExpectedApiKey = (received:string) => {
+    const receivedBytes = Buffer.from(received);
+    const expectedKeys = [
+        process.env.NEXT_PUBLIC_STREAM_VIDEO_API_KEY,
+        process.env.NEXT_PUBLIC_STREAM_CHAT_API_KEY,
+    ];
+    let matched = false;
+    for(const key of expectedKeys){
+        if(!key){
+            continue;
+        }
+        const keyBytes = Buffer.from(key);
+        if(keyBytes.length === receivedBytes.length && timingSafeEqual(keyBytes,receivedBytes)){
+            matched = true;
+        }
+    }
+    return matched;
+};
+
 export async function POST(req:NextRequest){
     const signature=req.headers.get("x-signature");
     const apiKey=req.headers.get("x-api-key");
@@ -27,6 +50,13 @@ export async function POST(req:NextRequest){
         return NextResponse.json(
             {error:"Missing signature or API key"},
             {status:400}
+        )
+    }
+    if(!isExpectedApiKey(apiKey)){
+        console.warn("Stream webhook rejected: unexpected API key");
+        return NextResponse.json(
+            {error:"Invalid API key"},
+            {status:401}
         )
     }
     // Stream can deliver webhook bodies gzip-compressed, and signs the uncompressed JSON.
